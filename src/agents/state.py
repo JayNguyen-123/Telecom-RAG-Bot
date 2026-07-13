@@ -1,0 +1,1 @@
+# Shared TypedDict structural definitions

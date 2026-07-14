@@ -1,0 +1,87 @@
+version: '3.8'
+
+networks:
+  telecom_mesh:
+    driver: bridge
+    name: telecom_network
+
+volumes:
+  postgres_data:
+    driver: local
+  qdrant_data:
+    driver: local
+
+services:
+  # ============================================================================
+  # SERVICE 1: Operational Relational Logging Store (PostgreSQL)
+  # ============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: telecom_postgres
+    restart: unless-stopped
+    networks:
+      - telecom_mesh
+    environment:
+      POSTGRES_DB: telecom_db
+      POSTGRES_USER: telecom_admin
+      POSTGRES_PASSWORD: SecretProductionPassword123!
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Mount schema script into docker entrypoint initialization folder
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telecom_admin -d telecom_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # SERVICE 2: High-Speed Payload Vector Engine (Qdrant)
+  # ============================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    container_name: telecom_qdrant
+    restart: unless-stopped
+    networks:
+      - telecom_mesh
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__API_KEY=SecretQdrantClusterToken456!
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # SERVICE 3: Main LangGraph State Machine Application (FastAPI Gateway)
+  # ============================================================================
+  api_gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telecom_api_gateway
+    restart: unless-stopped
+    networks:
+      - telecom_mesh
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY} # Seamlessly pulls from your local host shell profile
+      - QDRANT_API_KEY=SecretQdrantClusterToken456!
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION_NAME=telecom_knowledge_base
+      - DB_CONNECTION_STRING=postgresql://telecom_admin:SecretProductionPassword123!@postgres:5432/telecom_db
